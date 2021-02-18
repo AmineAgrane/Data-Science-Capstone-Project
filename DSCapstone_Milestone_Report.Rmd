@@ -1,0 +1,222 @@
+---
+title: "Data Science Capstone - Milestone Report"
+author: "Amine Agrane"
+date: "18/02/2021"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  word_document: default
+---
+
+This Milestone Report focuses on the two first tasks of the data science projects, which are : 
+  
+  - Task 1: Getting and Cleaning the Data
+  - Task 2 : Exploratory data analysis
+
+```{r echo=TRUE}
+# import the library
+library(data.table)
+library(tm)
+library(RWeka)
+library(ggplot2)
+```
+
+# Task 1 - Data acquisition and cleaning
+The goal of this task is to get familiar with the datasets and do the necessary cleaning to accomplish:
+
+1. <i> Tokenization </i> - identifying appropriate tokens such as words, punctuation, and numbers. Writing a function that takes a file as input and returns a tokenized version of it
+2. <i> Profanity filtering </i> - removing profanity and other words I do not want to predict
+
+<h3> Data Source </h3>
+The data source download was provided as part of the project sourced from <a href = "http://www.corpora.heliohost.org/"> HC Corpora </a>. The datasets contain text blocks from twitter, blog, and news sites in four languages - English, Finish, German, and Russian. I will be using the English dataset for this project.
+
+<h3> Data Summary </h3>
+We start by reading the englsih data files (blogs, news, and twitter) and we compute some basic characteristics of each file, which are the data size, the number of lines, and the number of words.
+
+## Import the data
+
+There are three text files that were supplied by the course. Each source represents sampled text from news, blog, and tweet. The`read_lines` function was used to import the data into a data frame where each row represents a line of text from the original file.
+
+```{r echo=FALSE, warning=FALSE, eval = FALSE}
+# Load the english blog data.
+con_blogs = file("./data/en_US/en_US.blogs.txt", "rb", encoding = "UTF-8")
+blogs = readLines(con_blogs)
+close(con_blogs)
+
+# Load the english news data.
+con_news = file("./data/en_US/en_US.news.txt", "rb", encoding = "UTF-8")
+news = readLines(con_news)
+close(con_news)
+
+# Load the english twitter data.
+con_twitter = file("./data/en_US/en_US.twitter.txt", "rb", encoding = "UTF-8")
+twitter = readLines(con_twitter)
+close(con_twitter)
+```
+
+
+The summary reveals that the datasets are very large and will not be conducive to building models and very time consuming. A sample of 5000 lines will be randomly extracted from each of the three original datasets. The sample of 15,000 lines will be saved so they do not have to be recreated everytime.
+
+
+```{r echo=TRUE}
+# Calculating size, number of lines, and number of words
+datasetNames = c("blogs", "news", "twitter")
+dataSize = sapply(datasetNames, function(x) {format(object.size(get(x)), units = "MB")})
+numLines = sapply(datasetNames, function(x) {length(get(x))})
+numWords = sapply(datasetNames, function(x) {sum(nchar(get(x)))})
+
+# Creating ouput for the data summary 
+data.table("Dataset" = datasetNames, "Size" = dataSize, "Lines" = numLines, "Words" = numWords)
+```
+
+
+## Data Cleaning 
+Since the data sets are quite large, we will randomly choose 0.5% of each data source and merge them together into one sampled dataset, so that we can use that dataset to demonstrate the data cleaning and exploratory analysis.
+
+```{r echo=TRUE, cache=TRUE, warning=FALSE}
+set.seed(100)
+
+# Merging the sample datasets into one, trainMerged is a vector of sentences
+trainMerged <- c(sample(blogs, length(blogs) * 0.005),
+                 sample(news, length(news) * 0.005),
+                 sample(twitter, length(twitter) * 0.005))
+
+
+# Saving merged dataset on disk
+write(trainMerged, "./data/sample_trainMerged.txt")
+
+# Print the size and some intances of the sampled data.
+print(length(trainMerged))
+print(trainMerged[10])
+print(trainMerged[200])
+```
+
+
+Now that we can work on the sampled data, we're going to implement a function to clean our text data. The function will include the following : 
+
+<li> Remove special characters
+<li> Remove punctuation
+<li> Remove numbers
+<li> Remove extra whitespace
+<li> Convert to lowercase
+<li> Remove stop words
+<li> Remove profanity words. 
+
+The list for profanity filtering was obtained from http://www.cs.cmu.edu/~biglou/resources/bad-words.txt The txt file contains an approximate of 1400 bad words.
+
+```{r echo=TRUE, warning=FALSE}
+badWords = readLines(file("./data/bad-words.txt", "r"))
+
+tokenizeFunction <- function(x) {
+  
+  # Remove special characters
+  x = gsub("/|\\||@|#", "", x)  
+  
+  # Remove puntuations
+  x = removePunctuation(x)
+  
+  # Remove numbers
+  x = removeNumbers(x)  
+  
+  # Remove extra whitespace
+  x = stripWhitespace(x)    
+  
+  # Convert to lowercase
+  x = tolower(x)     
+  
+  # Remove stop words
+  x = removeWords(x,stopwords("en"))  
+  
+  # Remove profanity words
+  x = removeWords(x,badWords)         
+  return(unlist(x))
+}
+
+# Apply cleaning function on the sampled data
+trainClean = tokenizeFunction(trainMerged)
+```
+
+
+```{r echo=TRUE, cache=TRUE, warning=FALSE}
+print(trainClean[10])
+print(trainClean[200])
+```
+
+After cleaning the data, we can see it has 15000 lines (5000 each sampled from blogs, news, and twitter), with approximately 1.8 million words to perform some exploratory analysis.
+
+# Task 2 - Exploratory analysis
+
+The goal of this task is to understand the distribution and relationship between the words, tokens, and phrases in the training/sample text. We will start by tokenizing the dataset. The first analysis we will perform is a unigram analysis. This will show us which words are the most frequent and what their frequency is. To do this, we will use the `Ngrams_Tokenizer` function. We will pass the argument 1 to get the unigrams. This will create a unigram Dataframe, which we will then manipulate so we can chart the frequencies using ggplot
+
+```{r echo=TRUE, warning=FALSE}
+# Convert trainClean to corpus
+trainCorpus = VectorSource(trainClean)
+trainCorpus = VCorpus(trainCorpus)
+
+# Define n-gram functions
+train.ng1 = function(x) NGramTokenizer(x, Weka_control(min=1,max=1))
+train.ng2 = function(x) NGramTokenizer(x, Weka_control(min=2,max=2))
+train.ng3 = function(x) NGramTokenizer(x, Weka_control(min=3,max=3))
+train.ng4 = function(x) NGramTokenizer(x, Weka_control(min=4,max=4))
+```
+
+
+```{r echo=TRUE}
+getFreq <- function(tdm) {
+  freq <- sort(rowSums(as.matrix(tdm)), decreasing = TRUE)
+  return(data.frame(word = names(freq), freq = freq))
+}
+
+makePlot <- function(data, label) {
+  ggplot(data[1:30,], aes(reorder(word, -freq), freq)) +
+         labs(x = label, y = "Frequency") +
+         theme(axis.text.x = element_text(angle = 60, size = 12, hjust = 1)) +
+         geom_bar(stat = "identity", fill = I("grey50"))
+}
+```
+
+```{r echo=TRUE, warning=FALSE, eval = FALSE}
+# Get frequencies of most common n-grams in data sample
+freq1 <- getFreq(removeSparseTerms(TermDocumentMatrix(trainCorpus, control = list(tokenize = train.ng1)), 0.9999))
+freq2 <- getFreq(removeSparseTerms(TermDocumentMatrix(trainCorpus, control = list(tokenize = train.ng2 )), 0.9999))
+freq3 <- getFreq(removeSparseTerms(TermDocumentMatrix(trainCorpus, control = list(tokenize = train.ng3)), 0.9999))
+```
+
+
+Here is a histogram of the 30 most common unigrams in the data sample.
+
+```{r, warning=FALSE}
+makePlot(freq1, "30 Most Common Unigrams")
+```
+
+Here is a histogram of the 30 most common bigrams in the data sample.
+
+```{r, warning=FALSE}
+makePlot(freq2, "30 Most Common Bigrams")
+```
+
+Here is a histogram of the 30 most common trigrams in the data sample.
+
+```{r, warning=FALSE}
+makePlot(freq3, "30 Most Common Trigrams")
+```
+
+This plot  show the most frequent words after tokenizing and removing the profanity and stop words.
+
+# Conclusion
+Based on the above research, it is concluded that the corpus formed by the blogs, twitter and news files create a distribution of words and n-grams.  This distribution can, in theory, be used to match an input phrase and return a probabilistic response that has some likelihood of predicting the next word in the phrase.  An obvious exception to this is the case where the corpus does not carry the phrase combination.  Another exception is the case where the phrase is a common figure of speech, for example "on the way to.....".  It is clear that there will be certain corner cases where the simple prediction algorithm will fail, however, there are likely to be many cases where the prediction is sufficiently accurate that the user will get the sense that the application functions at some rudimentary level of success.  Finally, it is observed that the distribution of n-grams is different across the three source files. Thus, there may be some use in sampling from the source documents at a different rate relative to one another.  
+
+## Next Steps
+
+Remaining tasks required to implement a functional natural language predictive application include but are not limited to:
+- Determine what level of sampling is needed to adequately predict the next word of a phrase   
+- Consider differential sampling rates between news, blogs and twitter corpus  
+- Tune a predictive model to properly select 2-gram and 3-gram combinations given their frequency of occurrence  
+- Consider the case where the input phrase is not in the corpus    
+- Develop a method to guess a word if not known
+- Handle the case where a high frequency word does not allow a good guess      
+- Create and test a shiny app  
+- Submit final report  
+
+
